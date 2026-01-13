@@ -7,3 +7,4 @@ library;
 /// range (inclusive). If `minTime` is later than `maxTime`, the range is
 /// treated as crossing midnight (e.g. 22:00–02:00).
 export 'src/custom_time_picker_material.dart' show CustomTimePickerDialog, showCustomTimePicker;
+export 'src/disabled_time_range.dart' show DisabledTimeRange;

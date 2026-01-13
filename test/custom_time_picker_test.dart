@@ -9,6 +9,7 @@ class _Harness extends StatefulWidget {
     required this.initialTime,
     this.alwaysUse24HourFormat = true,
     this.entryMode = TimePickerEntryMode.inputOnly,
+    this.disabledRanges = const <DisabledTimeRange>[],
   });
 
   final TimeOfDay? minTime;
@@ -16,6 +17,7 @@ class _Harness extends StatefulWidget {
   final TimeOfDay initialTime;
   final bool alwaysUse24HourFormat;
   final TimePickerEntryMode entryMode;
+  final List<DisabledTimeRange> disabledRanges;
 
   @override
   State<_Harness> createState() => _HarnessState();
@@ -46,6 +48,7 @@ class _HarnessState extends State<_Harness> {
                       initialTime: widget.initialTime,
                       minTime: widget.minTime,
                       maxTime: widget.maxTime,
+                      disabledRanges: widget.disabledRanges,
                       initialEntryMode: widget.entryMode,
                     );
                     setState(() => _selected = picked);
@@ -166,5 +169,36 @@ void main() {
 
     final InkWell inkWell = tester.widget<InkWell>(amInkWell);
     expect(inkWell.onTap, isNull);
+  });
+
+  testWidgets('disabledRanges blocks selection and snaps to nearest allowed time (input)', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const _Harness(
+        minTime: null,
+        maxTime: null,
+        initialTime: TimeOfDay(hour: 12, minute: 0),
+        disabledRanges: <DisabledTimeRange>[
+          DisabledTimeRange(start: TimeOfDay(hour: 9, minute: 0), end: TimeOfDay(hour: 11, minute: 0)),
+        ],
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final Finder fields = find.byType(TextFormField);
+    expect(fields, findsNWidgets(2));
+
+    await tester.enterText(fields.at(0), '10');
+    await tester.enterText(fields.at(1), '00');
+    await tester.pump();
+
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    // 10:00 is disabled; the picker searches forward first and should land on 11:01.
+    expect(find.text('selected: 11:01'), findsOneWidget);
   });
 }
