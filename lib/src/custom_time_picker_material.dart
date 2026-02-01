@@ -2588,6 +2588,7 @@ class CustomTimePickerDialog extends StatefulWidget {
     this.maxTime = const TimeOfDay(hour: 23, minute: 59),
     this.disabledRanges = const <DisabledTimeRange>[],
     this.highlightSpec,
+    this.onWillConfirm,
     this.cancelText,
     this.confirmText,
     this.helpText,
@@ -2622,6 +2623,12 @@ class CustomTimePickerDialog extends StatefulWidget {
 
   /// Optional highlight configuration (visual only).
   final HighlightSpec? highlightSpec;
+
+  /// Optional async hook invoked when the user presses the confirm button.
+  ///
+  /// Return `true` to allow the dialog to close and return the selected time.
+  /// Return `false` to keep the picker open.
+  final FutureOr<bool> Function(TimeOfDay selectedTime)? onWillConfirm;
 
   /// Optionally provide your own text for the cancel button.
   ///
@@ -2786,7 +2793,7 @@ class _CustomTimePickerDialogState extends State<CustomTimePickerDialog> with Re
     Navigator.pop(context);
   }
 
-  void _handleOk() {
+  Future<void> _handleOk() async {
     if (_entryMode.value == TimePickerEntryMode.input ||
         _entryMode.value == TimePickerEntryMode.inputOnly) {
       final FormState form = _formKey.currentState!;
@@ -2797,6 +2804,13 @@ class _CustomTimePickerDialogState extends State<CustomTimePickerDialog> with Re
         return;
       }
       form.save();
+    }
+
+    final willConfirm = widget.onWillConfirm;
+    if (willConfirm != null) {
+      final ok = await willConfirm(_selectedTime.value);
+      if (ok != true) return;
+      if (!mounted) return;
     }
     Navigator.pop(context, _selectedTime.value);
   }
@@ -3649,6 +3663,7 @@ Future<TimeOfDay?> showCustomTimePicker({
   TimeOfDay? maxTime,
   List<DisabledTimeRange>? disabledRanges,
   HighlightSpec? highlightSpec,
+  FutureOr<bool> Function(TimeOfDay selectedTime)? onWillConfirm,
   TransitionBuilder? builder,
   bool barrierDismissible = true,
   Color? barrierColor,
@@ -3688,6 +3703,7 @@ Future<TimeOfDay?> showCustomTimePicker({
     maxTime: effectiveMaxTime,
     disabledRanges: effectiveDisabledRanges,
     highlightSpec: highlightSpec,
+    onWillConfirm: onWillConfirm,
     initialEntryMode: initialEntryMode,
     cancelText: cancelText,
     confirmText: confirmText,
