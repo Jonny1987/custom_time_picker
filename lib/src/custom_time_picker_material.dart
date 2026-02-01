@@ -17,6 +17,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'disabled_time_range.dart';
+import 'highlighted_time_range.dart';
+import 'highlight_spec.dart';
 
 // Examples can assume:
 // late BuildContext context;
@@ -114,6 +116,25 @@ bool _isMinutesInAnyDisabledRangeInclusive(int minutes, List<DisabledTimeRange> 
   return false;
 }
 
+Color? _highlightColorForMinutesInclusive(int minutes, HighlightSpec? highlightSpec) {
+  if (highlightSpec == null || highlightSpec.ranges.isEmpty) {
+    return null;
+  }
+  for (final HighlightedTimeRange range in highlightSpec.ranges) {
+    final int start = _timeOfDayToMinutes(range.start);
+    final int end = _timeOfDayToMinutes(range.end);
+    if (_isMinutesInRangeInclusive(minutes, start, end)) {
+      // First range wins (by list order).
+      return highlightSpec.color;
+    }
+  }
+  return null;
+}
+
+Color? _highlightColorForTimeInclusive(TimeOfDay time, HighlightSpec? highlightSpec) {
+  return _highlightColorForMinutesInclusive(_timeOfDayToMinutes(time), highlightSpec);
+}
+
 int _clampMinutesToRangeInclusive(int minutes, int minMinutes, int maxMinutes) {
   if (_isMinutesInRangeInclusive(minutes, minMinutes, maxMinutes)) {
     return minutes;
@@ -185,6 +206,7 @@ enum _TimePickerAspect {
   minTime,
   maxTime,
   disabledRanges,
+  highlightSpec,
   selectedTime,
   onSelectedTimeChanged,
   orientation,
@@ -202,6 +224,7 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
     required this.minTime,
     required this.maxTime,
     required this.disabledRanges,
+    required this.highlightSpec,
     required this.selectedTime,
     required this.onSelectedTimeChanged,
     required this.use24HourFormat,
@@ -221,6 +244,7 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
   final TimeOfDay minTime;
   final TimeOfDay maxTime;
   final List<DisabledTimeRange> disabledRanges;
+  final HighlightSpec? highlightSpec;
   final TimeOfDay selectedTime;
   final ValueChanged<TimeOfDay> onSelectedTimeChanged;
   final bool use24HourFormat;
@@ -333,6 +357,10 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
         dependencies.contains(_TimePickerAspect.disabledRanges)) {
       return true;
     }
+    if (highlightSpec != oldWidget.highlightSpec &&
+        dependencies.contains(_TimePickerAspect.highlightSpec)) {
+      return true;
+    }
     if (selectedTime != oldWidget.selectedTime &&
         dependencies.contains(_TimePickerAspect.selectedTime)) {
       return true;
@@ -368,6 +396,7 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
         minTime != oldWidget.minTime ||
         maxTime != oldWidget.maxTime ||
         disabledRanges != oldWidget.disabledRanges ||
+        highlightSpec != oldWidget.highlightSpec ||
         selectedTime != oldWidget.selectedTime ||
         onSelectedTimeChanged != oldWidget.onSelectedTimeChanged ||
         orientation != oldWidget.orientation ||
@@ -388,6 +417,7 @@ class _TimePickerHeader extends StatelessWidget {
     ).timeOfDayFormat(alwaysUse24HourFormat: _TimePickerModel.use24HourFormatOf(context));
 
     final _HourDialType hourDialType = _TimePickerModel.hourDialTypeOf(context);
+
     switch (_TimePickerModel.orientationOf(context)) {
       case Orientation.portrait:
         return Column(
@@ -1079,6 +1109,7 @@ class _TappableLabel {
   _TappableLabel({
     required this.value,
     required this.inner,
+    required this.highlightColor,
     required this.painter,
     required this.onTap,
   });
@@ -1089,6 +1120,12 @@ class _TappableLabel {
   /// This value is part of the "inner" ring of values on the dial, used for 24
   /// hour input.
   final bool inner;
+
+  /// Optional background highlight color for this label.
+  ///
+  /// When multiple highlight ranges overlap, the first matching range is used
+  /// (handled by the range lookup logic).
+  final Color? highlightColor;
 
   /// Paints the text of the label.
   final TextPainter painter;
@@ -1189,8 +1226,19 @@ class _DialPainter extends CustomPainter {
 
       for (final _TappableLabel label in labels) {
         final TextPainter labelPainter = label.painter;
+        final Offset labelCenter = getOffsetForTheta(labelTheta, radius);
+        final Color? highlightColor = label.highlightColor;
+        if (highlightColor != null) {
+          final double highlightRadius =
+              math.max(labelPainter.width, labelPainter.height) / 2 + 10;
+          canvas.drawCircle(
+            labelCenter,
+            highlightRadius,
+            Paint()..color = highlightColor,
+          );
+        }
         final Offset labelOffset = Offset(-labelPainter.width / 2, -labelPainter.height / 2);
-        labelPainter.paint(canvas, getOffsetForTheta(labelTheta, radius) + labelOffset);
+        labelPainter.paint(canvas, labelCenter + labelOffset);
         labelTheta += labelThetaIncrement;
       }
     }
@@ -1249,6 +1297,7 @@ class _Dial extends StatefulWidget {
     required this.minTime,
     required this.maxTime,
     required this.disabledRanges,
+    required this.highlightSpec,
     required this.hourMinuteMode,
     required this.hourDialType,
     required this.onChanged,
@@ -1259,6 +1308,7 @@ class _Dial extends StatefulWidget {
   final TimeOfDay minTime;
   final TimeOfDay maxTime;
   final List<DisabledTimeRange> disabledRanges;
+  final HighlightSpec? highlightSpec;
   final _HourMinuteMode hourMinuteMode;
   final _HourDialType hourDialType;
   final ValueChanged<TimeOfDay>? onChanged;
@@ -1688,11 +1738,13 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
     required int value,
     required bool inner,
     required String label,
+    required Color? highlightColor,
     required VoidCallback onTap,
   }) {
     return _TappableLabel(
       value: value,
       inner: inner,
+      highlightColor: highlightColor,
       painter: TextPainter(
         text: TextSpan(style: textStyle, text: label),
         textDirection: TextDirection.ltr,
@@ -1702,24 +1754,51 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
     );
   }
 
+  Color? _highlightColorForHourAllowedInclusive(int hour, HighlightSpec? highlightSpec) {
+    if (highlightSpec == null || highlightSpec.ranges.isEmpty) {
+      return null;
+    }
+    // Highlight should never override disabled/min/max visuals. So we only
+    // highlight if there exists at least one minute in the hour that is BOTH:
+    // - within the highlight range
+    // - allowed by min/max + disabledRanges
+    //
+    // When highlight ranges overlap, first range wins.
+    for (final HighlightedTimeRange range in highlightSpec.ranges) {
+      final int start = _timeOfDayToMinutes(range.start);
+      final int end = _timeOfDayToMinutes(range.end);
+      for (int minute = 0; minute < 60; minute++) {
+        final TimeOfDay candidate = TimeOfDay(hour: hour, minute: minute);
+        if (!_isTimeAllowedInclusive(candidate, widget.minTime, widget.maxTime, widget.disabledRanges)) {
+          continue;
+        }
+        if (_isMinutesInRangeInclusive(_timeOfDayToMinutes(candidate), start, end)) {
+          return highlightSpec.color;
+        }
+      }
+    }
+    return null;
+  }
+
   List<_TappableLabel> _build24HourRing({
     required TextStyle? textStyle,
     required int selectedValue,
+    HighlightSpec? highlightSpec,
   }) {
     return <_TappableLabel>[
       if (themeData.useMaterial3)
         for (final TimeOfDay timeOfDay in _twentyFourHours)
-          _buildTappableLabel(
-            textStyle:
+          () {
+            final bool enabled =
                 _minAllowedMinuteInHourInclusive(
-                          timeOfDay.hour,
-                          widget.minTime,
-                          widget.maxTime,
-                          widget.disabledRanges,
-                        ) !=
-                        null
-                    ? textStyle
-                    : _disabledTextStyle(textStyle),
+                      timeOfDay.hour,
+                      widget.minTime,
+                      widget.maxTime,
+                      widget.disabledRanges,
+                    ) !=
+                    null;
+            return _buildTappableLabel(
+              textStyle: enabled ? textStyle : _disabledTextStyle(textStyle),
             selectedValue: selectedValue,
             inner: timeOfDay.hour >= 12,
             value: timeOfDay.hour,
@@ -1727,37 +1806,44 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
                 timeOfDay.hour != 0
                     ? '${timeOfDay.hour}'
                     : localizations.formatHour(timeOfDay, alwaysUse24HourFormat: true),
+            highlightColor:
+                enabled ? _highlightColorForHourAllowedInclusive(timeOfDay.hour, highlightSpec) : null,
             onTap: () {
               _selectHour(timeOfDay.hour);
             },
-          ),
+            );
+          }(),
       if (!themeData.useMaterial3)
         for (final TimeOfDay timeOfDay in _twentyFourHoursM2)
-          _buildTappableLabel(
-            textStyle:
+          () {
+            final bool enabled =
                 _minAllowedMinuteInHourInclusive(
-                          timeOfDay.hour,
-                          widget.minTime,
-                          widget.maxTime,
-                          widget.disabledRanges,
-                        ) !=
-                        null
-                    ? textStyle
-                    : _disabledTextStyle(textStyle),
+                      timeOfDay.hour,
+                      widget.minTime,
+                      widget.maxTime,
+                      widget.disabledRanges,
+                    ) !=
+                    null;
+            return _buildTappableLabel(
+              textStyle: enabled ? textStyle : _disabledTextStyle(textStyle),
             selectedValue: selectedValue,
             inner: false,
             value: timeOfDay.hour,
             label: localizations.formatHour(timeOfDay, alwaysUse24HourFormat: true),
+            highlightColor:
+                enabled ? _highlightColorForHourAllowedInclusive(timeOfDay.hour, highlightSpec) : null,
             onTap: () {
               _selectHour(timeOfDay.hour);
             },
-          ),
+            );
+          }(),
     ];
   }
 
   List<_TappableLabel> _build12HourRing({
     required TextStyle? textStyle,
     required int selectedValue,
+    HighlightSpec? highlightSpec,
   }) {
     return <_TappableLabel>[
       for (final TimeOfDay timeOfDay in _amHours)
@@ -1765,7 +1851,12 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
           final int hourOfPeriod = timeOfDay.hour % TimeOfDay.hoursPerPeriod;
           final int hour = hourOfPeriod + widget.selectedTime.periodOffset;
           final bool enabled =
-              _minAllowedMinuteInHourInclusive(hour, widget.minTime, widget.maxTime, widget.disabledRanges) !=
+              _minAllowedMinuteInHourInclusive(
+                hour,
+                widget.minTime,
+                widget.maxTime,
+                widget.disabledRanges,
+              ) !=
               null;
           final TextStyle? effectiveStyle = enabled ? textStyle : _disabledTextStyle(textStyle);
           return _buildTappableLabel(
@@ -1777,6 +1868,8 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
               timeOfDay,
               alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
             ),
+            highlightColor:
+                enabled ? _highlightColorForHourAllowedInclusive(hour, highlightSpec) : null,
             onTap: () {
               _selectHour(timeOfDay.hour);
             },
@@ -1785,7 +1878,11 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
     ];
   }
 
-  List<_TappableLabel> _buildMinutes({required TextStyle? textStyle, required int selectedValue}) {
+  List<_TappableLabel> _buildMinutes({
+    required TextStyle? textStyle,
+    required int selectedValue,
+    HighlightSpec? highlightSpec,
+  }) {
     const List<TimeOfDay> minuteMarkerValues = <TimeOfDay>[
       TimeOfDay(hour: 0, minute: 0),
       TimeOfDay(hour: 0, minute: 5),
@@ -1803,24 +1900,27 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
 
     return <_TappableLabel>[
       for (final TimeOfDay timeOfDay in minuteMarkerValues)
-        _buildTappableLabel(
-          textStyle:
-              _isTimeAllowedInclusive(
-                    TimeOfDay(hour: widget.selectedTime.hour, minute: timeOfDay.minute),
-                    widget.minTime,
-                    widget.maxTime,
-                    widget.disabledRanges,
-                  )
-                  ? textStyle
-                  : _disabledTextStyle(textStyle),
+        () {
+          final TimeOfDay candidate = TimeOfDay(hour: widget.selectedTime.hour, minute: timeOfDay.minute);
+          final bool enabled = _isTimeAllowedInclusive(
+            candidate,
+            widget.minTime,
+            widget.maxTime,
+            widget.disabledRanges,
+          );
+          return _buildTappableLabel(
+            textStyle: enabled ? textStyle : _disabledTextStyle(textStyle),
           selectedValue: selectedValue,
           inner: false,
           value: timeOfDay.minute,
           label: localizations.formatMinute(timeOfDay),
+          highlightColor:
+              enabled ? _highlightColorForTimeInclusive(candidate, highlightSpec) : null,
           onTap: () {
             _selectMinute(timeOfDay.minute);
           },
-        ),
+          );
+        }(),
     ];
   }
 
@@ -1861,6 +1961,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
             primaryLabels = _build24HourRing(
               textStyle: resolvedUnselectedLabelStyle,
               selectedValue: selectedDialValue,
+              highlightSpec: widget.highlightSpec,
             );
             selectedLabels = _build24HourRing(
               textStyle: resolvedSelectedLabelStyle,
@@ -1872,6 +1973,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
             primaryLabels = _build12HourRing(
               textStyle: resolvedUnselectedLabelStyle,
               selectedValue: selectedDialValue,
+              highlightSpec: widget.highlightSpec,
             );
             selectedLabels = _build12HourRing(
               textStyle: resolvedSelectedLabelStyle,
@@ -1884,6 +1986,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
         primaryLabels = _buildMinutes(
           textStyle: resolvedUnselectedLabelStyle,
           selectedValue: selectedDialValue,
+          highlightSpec: widget.highlightSpec,
         );
         selectedLabels = _buildMinutes(
           textStyle: resolvedSelectedLabelStyle,
@@ -2484,6 +2587,7 @@ class CustomTimePickerDialog extends StatefulWidget {
     this.minTime = const TimeOfDay(hour: 0, minute: 0),
     this.maxTime = const TimeOfDay(hour: 23, minute: 59),
     this.disabledRanges = const <DisabledTimeRange>[],
+    this.highlightSpec,
     this.cancelText,
     this.confirmText,
     this.helpText,
@@ -2515,6 +2619,9 @@ class CustomTimePickerDialog extends StatefulWidget {
   /// If a range's start is later than its end, it is treated as crossing
   /// midnight (e.g. 22:00–02:00).
   final List<DisabledTimeRange> disabledRanges;
+
+  /// Optional highlight configuration (visual only).
+  final HighlightSpec? highlightSpec;
 
   /// Optionally provide your own text for the cancel button.
   ///
@@ -2905,6 +3012,7 @@ class _CustomTimePickerDialogState extends State<CustomTimePickerDialog> with Re
                             minTime: widget.minTime,
                             maxTime: widget.maxTime,
                             disabledRanges: widget.disabledRanges,
+                            highlightSpec: widget.highlightSpec,
                             onTimeChanged: _handleTimeChanged,
                             helpText: widget.helpText,
                             cancelText: widget.cancelText,
@@ -2946,6 +3054,7 @@ class _TimePicker extends StatefulWidget {
     required this.minTime,
     required this.maxTime,
     required this.disabledRanges,
+    required this.highlightSpec,
     required this.onTimeChanged,
     this.helpText,
     this.cancelText,
@@ -3018,6 +3127,9 @@ class _TimePicker extends StatefulWidget {
 
   /// Optional time ranges to disable (greyed out and not selectable).
   final List<DisabledTimeRange> disabledRanges;
+
+  /// Optional highlight configuration (visual only).
+  final HighlightSpec? highlightSpec;
 
   final ValueChanged<TimeOfDay>? onTimeChanged;
 
@@ -3251,8 +3363,37 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
                 ? localizations.timePickerDialHelpText
                 : localizations.timePickerDialHelpText.toUpperCase());
 
+        final HighlightSpec? highlightSpec = widget.highlightSpec;
+        final bool showHighlightKey = highlightSpec != null && highlightSpec.ranges.isNotEmpty;
+        Widget buildHighlightKey() {
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: highlightSpec!.color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('=', style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  highlightSpec.label,
+                  style: Theme.of(context).textTheme.bodySmall,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          );
+        }
+
         final EdgeInsetsGeometry dialPadding = switch (orientation) {
-          Orientation.portrait => const EdgeInsets.only(left: 12, right: 12, top: 36),
+          // When we show a key above the dial, keep the dial close to it.
+          Orientation.portrait => EdgeInsets.only(left: 12, right: 12, top: showHighlightKey ? 8 : 36),
           Orientation.landscape => const EdgeInsetsDirectional.only(start: 64),
         };
         final Widget dial = Padding(
@@ -3269,6 +3410,7 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
                   minTime: widget.minTime,
                   maxTime: widget.maxTime,
                   disabledRanges: widget.disabledRanges,
+                  highlightSpec: widget.highlightSpec,
                   onChanged: _handleTimeChanged,
                   onHourSelected: _handleHourSelected,
                 ),
@@ -3290,7 +3432,16 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
                 Expanded(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
+                      if (showHighlightKey)
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(start: 16, end: 16, top: 24),
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: buildHighlightKey(),
+                          ),
+                        ),
                       // Dial grows and shrinks with the available space.
                       Expanded(
                         child: Padding(
@@ -3313,7 +3464,22 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: <Widget>[
                         _TimePickerHeader(helpText: helpText),
-                        Expanded(child: dial),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              if (showHighlightKey)
+                                Padding(
+                                  padding: const EdgeInsetsDirectional.only(top: 24, bottom: 4),
+                                  child: Align(
+                                    alignment: AlignmentDirectional.centerStart,
+                                    child: buildHighlightKey(),
+                                  ),
+                                ),
+                              Expanded(child: dial),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -3357,6 +3523,7 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
       minTime: widget.minTime,
       maxTime: widget.maxTime,
       disabledRanges: widget.disabledRanges,
+      highlightSpec: widget.highlightSpec,
       onSelectedTimeChanged: _handleTimeChanged,
       useMaterial3: theme.useMaterial3,
       use24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
@@ -3481,6 +3648,7 @@ Future<TimeOfDay?> showCustomTimePicker({
   TimeOfDay? minTime,
   TimeOfDay? maxTime,
   List<DisabledTimeRange>? disabledRanges,
+  HighlightSpec? highlightSpec,
   TransitionBuilder? builder,
   bool barrierDismissible = true,
   Color? barrierColor,
@@ -3519,6 +3687,7 @@ Future<TimeOfDay?> showCustomTimePicker({
     minTime: effectiveMinTime,
     maxTime: effectiveMaxTime,
     disabledRanges: effectiveDisabledRanges,
+    highlightSpec: highlightSpec,
     initialEntryMode: initialEntryMode,
     cancelText: cancelText,
     confirmText: confirmText,

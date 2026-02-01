@@ -1,4 +1,5 @@
 import 'package:custom_time_picker/custom_time_picker.dart';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,6 +11,7 @@ class _Harness extends StatefulWidget {
     this.alwaysUse24HourFormat = true,
     this.entryMode = TimePickerEntryMode.inputOnly,
     this.disabledRanges = const <DisabledTimeRange>[],
+    this.highlightSpec,
   });
 
   final TimeOfDay? minTime;
@@ -18,6 +20,7 @@ class _Harness extends StatefulWidget {
   final bool alwaysUse24HourFormat;
   final TimePickerEntryMode entryMode;
   final List<DisabledTimeRange> disabledRanges;
+  final HighlightSpec? highlightSpec;
 
   @override
   State<_Harness> createState() => _HarnessState();
@@ -29,6 +32,7 @@ class _HarnessState extends State<_Harness> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      theme: ThemeData(useMaterial3: true),
       builder: (BuildContext context, Widget? child) {
         return MediaQuery(
           data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: widget.alwaysUse24HourFormat),
@@ -49,6 +53,7 @@ class _HarnessState extends State<_Harness> {
                       minTime: widget.minTime,
                       maxTime: widget.maxTime,
                       disabledRanges: widget.disabledRanges,
+                      highlightSpec: widget.highlightSpec,
                       initialEntryMode: widget.entryMode,
                     );
                     setState(() => _selected = picked);
@@ -200,5 +205,63 @@ void main() {
 
     // 10:00 is disabled; the picker searches forward first and should land on 11:01.
     expect(find.text('selected: 11:01'), findsOneWidget);
+  });
+
+  testWidgets('highlightSpec does not prevent selecting or returning the time (dial)', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const _Harness(
+        minTime: null,
+        maxTime: null,
+        initialTime: TimeOfDay(hour: 9, minute: 0),
+        entryMode: TimePickerEntryMode.dial,
+        highlightSpec: HighlightSpec(
+          color: Colors.yellow,
+          label: 'Highlighted',
+          ranges: <HighlightedTimeRange>[
+            HighlightedTimeRange(
+              start: TimeOfDay(hour: 10, minute: 0),
+              end: TimeOfDay(hour: 10, minute: 10),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final Finder dialFinder = find.byKey(const ValueKey<String>('time-picker-dial'));
+    expect(dialFinder, findsOneWidget);
+
+    final RenderBox dialBox = tester.renderObject<RenderBox>(dialFinder);
+    final Offset dialCenter = dialBox.localToGlobal(dialBox.size.center(Offset.zero));
+    final double dialRadius = dialBox.size.shortestSide / 2;
+    final double labelRadius = dialRadius - 28; // matches _kTimePickerDialPadding
+    final double tapRadius = labelRadius * 0.95;
+
+    Offset pointForTheta(double theta) {
+      return dialCenter + Offset(tapRadius * math.cos(theta), -tapRadius * math.sin(theta));
+    }
+
+    // In 24-hour double-ring mode, the outer ring uses 12 positions (0-11).
+    double thetaForHourOn12StepRing(int hour) {
+      final double fraction = (hour / 12) % 12;
+      return (math.pi / 2 - fraction * (2 * math.pi)) % (2 * math.pi);
+    }
+
+    // Tap hour 10, which should switch the picker into minute selection mode.
+    await tester.tapAt(pointForTheta(thetaForHourOn12StepRing(10)));
+    await tester.pumpAndSettle();
+
+    // Tap minute 00 (top).
+    await tester.tapAt(pointForTheta(math.pi / 2));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('selected: 10:00'), findsOneWidget);
   });
 }

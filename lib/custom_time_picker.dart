@@ -8,3 +8,5 @@ library;
 /// treated as crossing midnight (e.g. 22:00–02:00).
 export 'src/custom_time_picker_material.dart' show CustomTimePickerDialog, showCustomTimePicker;
 export 'src/disabled_time_range.dart' show DisabledTimeRange;
+export 'src/highlighted_time_range.dart' show HighlightedTimeRange;
+export 'src/highlight_spec.dart' show HighlightSpec;
