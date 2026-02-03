@@ -46,17 +46,47 @@ TextStyle? _disabledTextStyle(TextStyle? style) {
   return style.copyWith(color: _withOpacity(base, 0.38));
 }
 
+/// Allowed minute selection increments for the picker.
+enum MinuteInterval {
+  five(5),
+  ten(10),
+  fifteen(15),
+  twenty(20),
+  thirty(30);
+
+  const MinuteInterval(this.minutes);
+  final int minutes;
+}
+
 int _timeOfDayToMinutes(TimeOfDay time) => time.hour * 60 + time.minute;
+
+bool _isMinuteSelectable(int minute, MinuteInterval? minuteInterval) {
+  final int? step = minuteInterval?.minutes;
+  if (step == null) {
+    return true;
+  }
+  return minute % step == 0;
+}
+
+int _roundMinuteToInterval(int minute, int interval) {
+  // Round to the nearest interval (ties round up).
+  final int half = interval ~/ 2;
+  return ((minute + half) ~/ interval) * interval % TimeOfDay.minutesPerHour;
+}
 
 bool _isTimeAllowedInclusive(
   TimeOfDay time,
   TimeOfDay minTime,
   TimeOfDay maxTime,
   List<DisabledTimeRange> disabledRanges,
+  {MinuteInterval? minuteInterval,}
 ) {
   final int minutes = _timeOfDayToMinutes(time);
   final int minMinutes = _timeOfDayToMinutes(minTime);
   final int maxMinutes = _timeOfDayToMinutes(maxTime);
+  if (!_isMinuteSelectable(time.minute, minuteInterval)) {
+    return false;
+  }
   return _isMinutesInRangeInclusive(minutes, minMinutes, maxMinutes) &&
       !_isMinutesInAnyDisabledRangeInclusive(minutes, disabledRanges);
 }
@@ -66,9 +96,19 @@ int? _minAllowedMinuteInHourInclusive(
   TimeOfDay minTime,
   TimeOfDay maxTime,
   List<DisabledTimeRange> disabledRanges,
+  {MinuteInterval? minuteInterval,}
 ) {
   for (int minute = 0; minute < 60; minute++) {
-    if (_isTimeAllowedInclusive(TimeOfDay(hour: hour, minute: minute), minTime, maxTime, disabledRanges)) {
+    if (!_isMinuteSelectable(minute, minuteInterval)) {
+      continue;
+    }
+    if (_isTimeAllowedInclusive(
+      TimeOfDay(hour: hour, minute: minute),
+      minTime,
+      maxTime,
+      disabledRanges,
+      minuteInterval: minuteInterval,
+    )) {
       return minute;
     }
   }
@@ -80,11 +120,19 @@ bool _isAnyTimeAllowedInPeriodInclusive(
   TimeOfDay minTime,
   TimeOfDay maxTime,
   List<DisabledTimeRange> disabledRanges,
+  {MinuteInterval? minuteInterval,}
 ) {
   final int startHour = period == DayPeriod.am ? 0 : 12;
   final int endHour = period == DayPeriod.am ? 11 : 23;
   for (int hour = startHour; hour <= endHour; hour++) {
-    if (_minAllowedMinuteInHourInclusive(hour, minTime, maxTime, disabledRanges) != null) {
+    if (_minAllowedMinuteInHourInclusive(
+          hour,
+          minTime,
+          maxTime,
+          disabledRanges,
+          minuteInterval: minuteInterval,
+        ) !=
+        null) {
       return true;
     }
   }
@@ -163,9 +211,16 @@ TimeOfDay _clampTimeOfDayToAllowedInclusive(
   TimeOfDay minTime,
   TimeOfDay maxTime,
   List<DisabledTimeRange> disabledRanges,
+  {MinuteInterval? minuteInterval,}
 ) {
   TimeOfDay candidate = _clampTimeOfDayToRangeInclusive(time, minTime, maxTime);
-  if (_isTimeAllowedInclusive(candidate, minTime, maxTime, disabledRanges)) {
+  if (_isTimeAllowedInclusive(
+    candidate,
+    minTime,
+    maxTime,
+    disabledRanges,
+    minuteInterval: minuteInterval,
+  )) {
     return candidate;
   }
 
@@ -173,7 +228,13 @@ TimeOfDay _clampTimeOfDayToAllowedInclusive(
   for (int delta = 1; delta < 24 * 60; delta++) {
     final int forward = (startMinutes + delta) % (24 * 60);
     final TimeOfDay forwardTime = TimeOfDay(hour: forward ~/ 60, minute: forward % 60);
-    if (_isTimeAllowedInclusive(forwardTime, minTime, maxTime, disabledRanges)) {
+    if (_isTimeAllowedInclusive(
+      forwardTime,
+      minTime,
+      maxTime,
+      disabledRanges,
+      minuteInterval: minuteInterval,
+    )) {
       return forwardTime;
     }
     final int backward = (startMinutes - delta) % (24 * 60);
@@ -182,7 +243,13 @@ TimeOfDay _clampTimeOfDayToAllowedInclusive(
       hour: normalizedBackward ~/ 60,
       minute: normalizedBackward % 60,
     );
-    if (_isTimeAllowedInclusive(backwardTime, minTime, maxTime, disabledRanges)) {
+    if (_isTimeAllowedInclusive(
+      backwardTime,
+      minTime,
+      maxTime,
+      disabledRanges,
+      minuteInterval: minuteInterval,
+    )) {
       return backwardTime;
     }
   }
@@ -203,6 +270,7 @@ enum _TimePickerAspect {
   onHourDoubleTapped,
   onMinuteDoubleTapped,
   hourDialType,
+  minuteInterval,
   minTime,
   maxTime,
   disabledRanges,
@@ -221,6 +289,7 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
     required this.onHourMinuteModeChanged,
     required this.onHourDoubleTapped,
     required this.onMinuteDoubleTapped,
+    required this.minuteInterval,
     required this.minTime,
     required this.maxTime,
     required this.disabledRanges,
@@ -241,6 +310,7 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
   final ValueChanged<_HourMinuteMode> onHourMinuteModeChanged;
   final GestureTapCallback onHourDoubleTapped;
   final GestureTapCallback onMinuteDoubleTapped;
+  final MinuteInterval? minuteInterval;
   final TimeOfDay minTime;
   final TimeOfDay maxTime;
   final List<DisabledTimeRange> disabledRanges;
@@ -268,6 +338,8 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
       of(context, _TimePickerAspect.useMaterial3).useMaterial3;
   static _HourDialType hourDialTypeOf(BuildContext context) =>
       of(context, _TimePickerAspect.hourDialType).hourDialType;
+  static MinuteInterval? minuteIntervalOf(BuildContext context) =>
+      of(context, _TimePickerAspect.minuteInterval).minuteInterval;
   static Orientation orientationOf(BuildContext context) =>
       of(context, _TimePickerAspect.orientation).orientation;
   static TimePickerThemeData themeOf(BuildContext context) =>
@@ -278,7 +350,13 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
   static void setSelectedTime(BuildContext context, TimeOfDay value) {
     final _TimePickerModel model = of(context);
     TimeOfDay candidate = _clampTimeOfDayToRangeInclusive(value, model.minTime, model.maxTime);
-    if (_isTimeAllowedInclusive(candidate, model.minTime, model.maxTime, model.disabledRanges)) {
+    if (_isTimeAllowedInclusive(
+      candidate,
+      model.minTime,
+      model.maxTime,
+      model.disabledRanges,
+      minuteInterval: model.minuteInterval,
+    )) {
       model.onSelectedTimeChanged(candidate);
       return;
     }
@@ -289,7 +367,13 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
     for (int delta = 1; delta < 24 * 60; delta++) {
       final int forward = (startMinutes + delta) % (24 * 60);
       final TimeOfDay forwardTime = TimeOfDay(hour: forward ~/ 60, minute: forward % 60);
-      if (_isTimeAllowedInclusive(forwardTime, model.minTime, model.maxTime, model.disabledRanges)) {
+      if (_isTimeAllowedInclusive(
+        forwardTime,
+        model.minTime,
+        model.maxTime,
+        model.disabledRanges,
+        minuteInterval: model.minuteInterval,
+      )) {
         model.onSelectedTimeChanged(forwardTime);
         return;
       }
@@ -299,7 +383,13 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
         hour: normalizedBackward ~/ 60,
         minute: normalizedBackward % 60,
       );
-      if (_isTimeAllowedInclusive(backwardTime, model.minTime, model.maxTime, model.disabledRanges)) {
+      if (_isTimeAllowedInclusive(
+        backwardTime,
+        model.minTime,
+        model.maxTime,
+        model.disabledRanges,
+        minuteInterval: model.minuteInterval,
+      )) {
         model.onSelectedTimeChanged(backwardTime);
         return;
       }
@@ -345,6 +435,10 @@ class _TimePickerModel extends InheritedModel<_TimePickerAspect> {
     }
     if (hourDialType != oldWidget.hourDialType &&
         dependencies.contains(_TimePickerAspect.hourDialType)) {
+      return true;
+    }
+    if (minuteInterval != oldWidget.minuteInterval &&
+        dependencies.contains(_TimePickerAspect.minuteInterval)) {
       return true;
     }
     if (minTime != oldWidget.minTime && dependencies.contains(_TimePickerAspect.minTime)) {
@@ -711,12 +805,13 @@ class _MinuteControl extends StatelessWidget {
     final MaterialLocalizations localizations = MaterialLocalizations.of(context);
     final TimeOfDay selectedTime = _TimePickerModel.selectedTimeOf(context);
     final String formattedMinute = localizations.formatMinute(selectedTime);
+    final int minuteStep = _TimePickerModel.minuteIntervalOf(context)?.minutes ?? 1;
     final TimeOfDay nextMinute = selectedTime.replacing(
-      minute: (selectedTime.minute + 1) % TimeOfDay.minutesPerHour,
+      minute: (selectedTime.minute + minuteStep) % TimeOfDay.minutesPerHour,
     );
     final String formattedNextMinute = localizations.formatMinute(nextMinute);
     final TimeOfDay previousMinute = selectedTime.replacing(
-      minute: (selectedTime.minute - 1) % TimeOfDay.minutesPerHour,
+      minute: (selectedTime.minute - minuteStep) % TimeOfDay.minutesPerHour,
     );
     final String formattedPreviousMinute = localizations.formatMinute(previousMinute);
 
@@ -819,9 +914,21 @@ class _DayPeriodControl extends StatelessWidget {
     final bool amSelected = selectedTime.period == DayPeriod.am;
     final bool pmSelected = !amSelected;
     final bool amEnabled =
-        _isAnyTimeAllowedInPeriodInclusive(DayPeriod.am, model.minTime, model.maxTime, model.disabledRanges);
+        _isAnyTimeAllowedInPeriodInclusive(
+          DayPeriod.am,
+          model.minTime,
+          model.maxTime,
+          model.disabledRanges,
+          minuteInterval: model.minuteInterval,
+        );
     final bool pmEnabled =
-        _isAnyTimeAllowedInPeriodInclusive(DayPeriod.pm, model.minTime, model.maxTime, model.disabledRanges);
+        _isAnyTimeAllowedInPeriodInclusive(
+          DayPeriod.pm,
+          model.minTime,
+          model.maxTime,
+          model.disabledRanges,
+          minuteInterval: model.minuteInterval,
+        );
     final BorderSide resolvedSide =
         timePickerTheme.dayPeriodBorderSide ?? defaultTheme.dayPeriodBorderSide;
     final OutlinedBorder resolvedShape = (timePickerTheme.dayPeriodShape ??
@@ -1298,6 +1405,7 @@ class _Dial extends StatefulWidget {
     required this.maxTime,
     required this.disabledRanges,
     required this.highlightSpec,
+    required this.minuteInterval,
     required this.hourMinuteMode,
     required this.hourDialType,
     required this.onChanged,
@@ -1309,6 +1417,7 @@ class _Dial extends StatefulWidget {
   final TimeOfDay maxTime;
   final List<DisabledTimeRange> disabledRanges;
   final HighlightSpec? highlightSpec;
+  final MinuteInterval? minuteInterval;
   final _HourMinuteMode hourMinuteMode;
   final _HourDialType hourDialType;
   final ValueChanged<TimeOfDay>? onChanged;
@@ -1461,9 +1570,12 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
         return widget.selectedTime.replacing(hour: newHour);
       case _HourMinuteMode.minute:
         int minute = (fraction * TimeOfDay.minutesPerHour).round() % TimeOfDay.minutesPerHour;
-        if (roundMinutes) {
-          // Round the minutes to nearest 5 minute interval.
-          minute = ((minute + 2) ~/ 5) * 5 % TimeOfDay.minutesPerHour;
+        final MinuteInterval? minuteInterval = widget.minuteInterval;
+        if (minuteInterval != null) {
+          minute = _roundMinuteToInterval(minute, minuteInterval.minutes);
+        } else if (roundMinutes) {
+          // Round the minutes to nearest 5 minute interval (default dial behavior).
+          minute = _roundMinuteToInterval(minute, 5);
         }
         return widget.selectedTime.replacing(minute: minute);
     }
@@ -1476,13 +1588,20 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
       radius: _radius.value,
     );
 
-    if (!_isTimeAllowedInclusive(current, widget.minTime, widget.maxTime, widget.disabledRanges)) {
+    if (!_isTimeAllowedInclusive(
+      current,
+      widget.minTime,
+      widget.maxTime,
+      widget.disabledRanges,
+      minuteInterval: widget.minuteInterval,
+    )) {
       if (widget.hourMinuteMode == _HourMinuteMode.hour) {
         final int? minAllowedMinute = _minAllowedMinuteInHourInclusive(
           current.hour,
           widget.minTime,
           widget.maxTime,
           widget.disabledRanges,
+          minuteInterval: widget.minuteInterval,
         );
         if (minAllowedMinute == null) {
           return widget.selectedTime;
@@ -1541,14 +1660,16 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
     _position = box.globalToLocal(details.globalPosition);
     _dialSize = box.size;
     _center = _dialSize!.center(Offset.zero);
-    _updateThetaForPan();
-    _notifyOnChangedIfNeeded();
+    final bool snapMinutes = widget.hourMinuteMode == _HourMinuteMode.minute && widget.minuteInterval != null;
+    _updateThetaForPan(roundMinutes: snapMinutes);
+    _notifyOnChangedIfNeeded(roundMinutes: snapMinutes);
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
     _position = _position! + details.delta;
-    _updateThetaForPan();
-    _notifyOnChangedIfNeeded();
+    final bool snapMinutes = widget.hourMinuteMode == _HourMinuteMode.minute && widget.minuteInterval != null;
+    _updateThetaForPan(roundMinutes: snapMinutes);
+    _notifyOnChangedIfNeeded(roundMinutes: snapMinutes);
   }
 
   void _handlePanEnd(DragEndDetails details) {
@@ -1581,6 +1702,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
         widget.minTime,
         widget.maxTime,
         widget.disabledRanges,
+        minuteInterval: widget.minuteInterval,
       );
       if (minAllowedMinute == null) {
         // Invalid hour: do nothing and animate back.
@@ -1610,7 +1732,13 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
       _animateTo(_getThetaForTime(adjusted), _getRadiusForTime(adjusted));
     } else {
       // Minute mode.
-      if (!_isTimeAllowedInclusive(tapped, widget.minTime, widget.maxTime, widget.disabledRanges)) {
+      if (!_isTimeAllowedInclusive(
+        tapped,
+        widget.minTime,
+        widget.maxTime,
+        widget.disabledRanges,
+        minuteInterval: widget.minuteInterval,
+      )) {
         _animateTo(_getThetaForTime(widget.selectedTime), _getRadiusForTime(widget.selectedTime));
         _dragging = false;
         _position = null;
@@ -1768,8 +1896,17 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
       final int start = _timeOfDayToMinutes(range.start);
       final int end = _timeOfDayToMinutes(range.end);
       for (int minute = 0; minute < 60; minute++) {
+        if (!_isMinuteSelectable(minute, widget.minuteInterval)) {
+          continue;
+        }
         final TimeOfDay candidate = TimeOfDay(hour: hour, minute: minute);
-        if (!_isTimeAllowedInclusive(candidate, widget.minTime, widget.maxTime, widget.disabledRanges)) {
+        if (!_isTimeAllowedInclusive(
+          candidate,
+          widget.minTime,
+          widget.maxTime,
+          widget.disabledRanges,
+          minuteInterval: widget.minuteInterval,
+        )) {
           continue;
         }
         if (_isMinutesInRangeInclusive(_timeOfDayToMinutes(candidate), start, end)) {
@@ -1795,6 +1932,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
                       widget.minTime,
                       widget.maxTime,
                       widget.disabledRanges,
+                      minuteInterval: widget.minuteInterval,
                     ) !=
                     null;
             return _buildTappableLabel(
@@ -1822,6 +1960,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
                       widget.minTime,
                       widget.maxTime,
                       widget.disabledRanges,
+                      minuteInterval: widget.minuteInterval,
                     ) !=
                     null;
             return _buildTappableLabel(
@@ -1856,6 +1995,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
                 widget.minTime,
                 widget.maxTime,
                 widget.disabledRanges,
+                minuteInterval: widget.minuteInterval,
               ) !=
               null;
           final TextStyle? effectiveStyle = enabled ? textStyle : _disabledTextStyle(textStyle);
@@ -1883,19 +2023,9 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
     required int selectedValue,
     HighlightSpec? highlightSpec,
   }) {
-    const List<TimeOfDay> minuteMarkerValues = <TimeOfDay>[
-      TimeOfDay(hour: 0, minute: 0),
-      TimeOfDay(hour: 0, minute: 5),
-      TimeOfDay(hour: 0, minute: 10),
-      TimeOfDay(hour: 0, minute: 15),
-      TimeOfDay(hour: 0, minute: 20),
-      TimeOfDay(hour: 0, minute: 25),
-      TimeOfDay(hour: 0, minute: 30),
-      TimeOfDay(hour: 0, minute: 35),
-      TimeOfDay(hour: 0, minute: 40),
-      TimeOfDay(hour: 0, minute: 45),
-      TimeOfDay(hour: 0, minute: 50),
-      TimeOfDay(hour: 0, minute: 55),
+    final int step = widget.minuteInterval?.minutes ?? 5;
+    final List<TimeOfDay> minuteMarkerValues = <TimeOfDay>[
+      for (int minute = 0; minute < 60; minute += step) TimeOfDay(hour: 0, minute: minute),
     ];
 
     return <_TappableLabel>[
@@ -1907,6 +2037,7 @@ class _DialState extends State<_Dial> with SingleTickerProviderStateMixin {
             widget.minTime,
             widget.maxTime,
             widget.disabledRanges,
+            minuteInterval: widget.minuteInterval,
           );
           return _buildTappableLabel(
             textStyle: enabled ? textStyle : _disabledTextStyle(textStyle),
@@ -2588,6 +2719,7 @@ class CustomTimePickerDialog extends StatefulWidget {
     this.maxTime = const TimeOfDay(hour: 23, minute: 59),
     this.disabledRanges = const <DisabledTimeRange>[],
     this.highlightSpec,
+    this.minuteInterval,
     this.onWillConfirm,
     this.cancelText,
     this.confirmText,
@@ -2623,6 +2755,11 @@ class CustomTimePickerDialog extends StatefulWidget {
 
   /// Optional highlight configuration (visual only).
   final HighlightSpec? highlightSpec;
+
+  /// If set, restricts selection to minutes that are multiples of this value.
+  ///
+  /// Supported values are: 5, 10, 15, 20, 30.
+  final MinuteInterval? minuteInterval;
 
   /// Optional async hook invoked when the user presses the confirm button.
   ///
@@ -2706,6 +2843,7 @@ class _CustomTimePickerDialogState extends State<CustomTimePickerDialog> with Re
       widget.minTime,
       widget.maxTime,
       widget.disabledRanges,
+      minuteInterval: widget.minuteInterval,
     ),
   );
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
@@ -3027,6 +3165,7 @@ class _CustomTimePickerDialogState extends State<CustomTimePickerDialog> with Re
                             maxTime: widget.maxTime,
                             disabledRanges: widget.disabledRanges,
                             highlightSpec: widget.highlightSpec,
+                            minuteInterval: widget.minuteInterval,
                             onTimeChanged: _handleTimeChanged,
                             helpText: widget.helpText,
                             cancelText: widget.cancelText,
@@ -3069,6 +3208,7 @@ class _TimePicker extends StatefulWidget {
     required this.maxTime,
     required this.disabledRanges,
     required this.highlightSpec,
+    this.minuteInterval,
     required this.onTimeChanged,
     this.helpText,
     this.cancelText,
@@ -3144,6 +3284,11 @@ class _TimePicker extends StatefulWidget {
 
   /// Optional highlight configuration (visual only).
   final HighlightSpec? highlightSpec;
+
+  /// If set, restricts selection to minutes that are multiples of this value.
+  ///
+  /// Supported values are: 5, 10, 15, 20, 30.
+  final MinuteInterval? minuteInterval;
 
   final ValueChanged<TimeOfDay>? onTimeChanged;
 
@@ -3320,7 +3465,13 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
   }
 
   void _handleTimeChanged(TimeOfDay value) {
-    if (!_isTimeAllowedInclusive(value, widget.minTime, widget.maxTime, widget.disabledRanges)) {
+    if (!_isTimeAllowedInclusive(
+      value,
+      widget.minTime,
+      widget.maxTime,
+      widget.disabledRanges,
+      minuteInterval: widget.minuteInterval,
+    )) {
       return;
     }
     _vibrate();
@@ -3425,6 +3576,7 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
                   maxTime: widget.maxTime,
                   disabledRanges: widget.disabledRanges,
                   highlightSpec: widget.highlightSpec,
+                  minuteInterval: widget.minuteInterval,
                   onChanged: _handleTimeChanged,
                   onHourSelected: _handleHourSelected,
                 ),
@@ -3533,6 +3685,7 @@ class _TimePickerState extends State<_TimePicker> with RestorationMixin {
       onHourMinuteModeChanged: _handleHourMinuteModeChanged,
       onHourDoubleTapped: _handleHourDoubleTapped,
       onMinuteDoubleTapped: _handleMinuteDoubleTapped,
+      minuteInterval: widget.minuteInterval,
       hourDialType: hourMode,
       minTime: widget.minTime,
       maxTime: widget.maxTime,
@@ -3663,6 +3816,7 @@ Future<TimeOfDay?> showCustomTimePicker({
   TimeOfDay? maxTime,
   List<DisabledTimeRange>? disabledRanges,
   HighlightSpec? highlightSpec,
+  MinuteInterval? minuteInterval,
   FutureOr<bool> Function(TimeOfDay selectedTime)? onWillConfirm,
   TransitionBuilder? builder,
   bool barrierDismissible = true,
@@ -3698,11 +3852,13 @@ Future<TimeOfDay?> showCustomTimePicker({
       effectiveMinTime,
       effectiveMaxTime,
       effectiveDisabledRanges,
+      minuteInterval: minuteInterval,
     ),
     minTime: effectiveMinTime,
     maxTime: effectiveMaxTime,
     disabledRanges: effectiveDisabledRanges,
     highlightSpec: highlightSpec,
+    minuteInterval: minuteInterval,
     onWillConfirm: onWillConfirm,
     initialEntryMode: initialEntryMode,
     cancelText: cancelText,

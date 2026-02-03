@@ -12,6 +12,7 @@ class _Harness extends StatefulWidget {
     this.entryMode = TimePickerEntryMode.inputOnly,
     this.disabledRanges = const <DisabledTimeRange>[],
     this.highlightSpec,
+    this.minuteInterval,
   });
 
   final TimeOfDay? minTime;
@@ -21,6 +22,7 @@ class _Harness extends StatefulWidget {
   final TimePickerEntryMode entryMode;
   final List<DisabledTimeRange> disabledRanges;
   final HighlightSpec? highlightSpec;
+  final MinuteInterval? minuteInterval;
 
   @override
   State<_Harness> createState() => _HarnessState();
@@ -54,6 +56,7 @@ class _HarnessState extends State<_Harness> {
                       maxTime: widget.maxTime,
                       disabledRanges: widget.disabledRanges,
                       highlightSpec: widget.highlightSpec,
+                      minuteInterval: widget.minuteInterval,
                       initialEntryMode: widget.entryMode,
                     );
                     setState(() => _selected = picked);
@@ -263,5 +266,84 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('selected: 10:00'), findsOneWidget);
+  });
+
+  testWidgets('minuteInterval snaps typed minutes to the nearest allowed value (input)', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const _Harness(
+        minTime: null,
+        maxTime: null,
+        initialTime: TimeOfDay(hour: 12, minute: 0),
+        minuteInterval: MinuteInterval.ten,
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final Finder fields = find.byType(TextFormField);
+    expect(fields, findsNWidgets(2));
+
+    await tester.enterText(fields.at(0), '12');
+    await tester.enterText(fields.at(1), '07');
+    await tester.pump();
+
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    // 12:07 is not selectable with a 10-minute interval; it should snap to 12:10.
+    expect(find.text('selected: 12:10'), findsOneWidget);
+  });
+
+  testWidgets('minuteInterval snaps dial minute taps to the allowed grid (dial)', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const _Harness(
+        minTime: null,
+        maxTime: null,
+        initialTime: TimeOfDay(hour: 9, minute: 0),
+        entryMode: TimePickerEntryMode.dial,
+        minuteInterval: MinuteInterval.fifteen,
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final Finder dialFinder = find.byKey(const ValueKey<String>('time-picker-dial'));
+    expect(dialFinder, findsOneWidget);
+
+    final RenderBox dialBox = tester.renderObject<RenderBox>(dialFinder);
+    final Offset dialCenter = dialBox.localToGlobal(dialBox.size.center(Offset.zero));
+    final double dialRadius = dialBox.size.shortestSide / 2;
+    final double labelRadius = dialRadius - 28; // matches _kTimePickerDialPadding
+    final double tapRadius = labelRadius * 0.95;
+
+    Offset pointForTheta(double theta) {
+      return dialCenter + Offset(tapRadius * math.cos(theta), -tapRadius * math.sin(theta));
+    }
+
+    // In 24-hour double-ring mode, the outer ring uses 12 positions (0-11).
+    double thetaForHourOn12StepRing(int hour) {
+      final double fraction = (hour / 12) % 12;
+      return (math.pi / 2 - fraction * (2 * math.pi)) % (2 * math.pi);
+    }
+
+    // Tap hour 10 to switch to minute selection mode.
+    await tester.tapAt(pointForTheta(thetaForHourOn12StepRing(10)));
+    await tester.pumpAndSettle();
+
+    // Tap at minute 10, which should snap to 15 with a 15-minute interval.
+    final double thetaForMinute10 = (math.pi / 2 - (10 / 60) * (2 * math.pi)) % (2 * math.pi);
+    await tester.tapAt(pointForTheta(thetaForMinute10));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('selected: 10:15'), findsOneWidget);
   });
 }
